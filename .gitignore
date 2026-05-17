@@ -1,0 +1,32 @@
+# 该文件用于忽略本地缓存、模型权重、运行产物和临时文件，避免误提交大文件。
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Local model/cache
+hf_cache/
+.cache/
+
+# Runtime uploads/output
+uploads/
+
+# Local env/secrets
+.env
+.env.*
+
+# OS/editor junk
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Logs/temp
+*.log
+tmp/
+temp/
+
+# Local debug artifacts
+dryrun_conda.json

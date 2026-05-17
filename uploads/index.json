@@ -1,14 +1,64 @@
 {
   "assets": {
-    "b57a2dafdfe140f2": {
-      "asset_id": "b57a2dafdfe140f2",
+    "7814279c5ae348de": {
+      "asset_id": "7814279c5ae348de",
       "origin_name": "ChatGPT Image 2026年5月17日 02_16_23.png",
       "content_type": "image/png",
       "ext": ".png",
       "kind": "image",
       "size": 2308014,
-      "path": "D:\\multimodal_agent\\uploads\\files\\b57a2dafdfe140f2.png",
-      "created_at": "2026-05-17T06:27:08.987395+00:00"
+      "path": "D:\\multimodal_agent\\uploads\\files\\7814279c5ae348de.png",
+      "created_at": "2026-05-17T15:36:51.502968+00:00"
+    },
+    "c3c2b1d7c5f24370": {
+      "asset_id": "c3c2b1d7c5f24370",
+      "origin_name": "test.png",
+      "content_type": "image/png",
+      "ext": ".png",
+      "kind": "image",
+      "size": 1947,
+      "path": "D:\\multimodal_agent\\uploads\\files\\c3c2b1d7c5f24370.png",
+      "created_at": "2026-05-17T15:40:53.082702+00:00"
+    },
+    "8adc647fbd684c42": {
+      "asset_id": "8adc647fbd684c42",
+      "origin_name": "a.png",
+      "content_type": "image/png",
+      "ext": ".png",
+      "kind": "image",
+      "size": 779,
+      "path": "D:\\multimodal_agent\\uploads\\files\\8adc647fbd684c42.png",
+      "created_at": "2026-05-17T15:55:22.587064+00:00"
+    },
+    "896f7238299a4949": {
+      "asset_id": "896f7238299a4949",
+      "origin_name": "b.png",
+      "content_type": "image/png",
+      "ext": ".png",
+      "kind": "image",
+      "size": 779,
+      "path": "D:\\multimodal_agent\\uploads\\files\\896f7238299a4949.png",
+      "created_at": "2026-05-17T15:56:53.710570+00:00"
+    },
+    "a7c3daabbee241af": {
+      "asset_id": "a7c3daabbee241af",
+      "origin_name": "x.png",
+      "content_type": "image/png",
+      "ext": ".png",
+      "kind": "image",
+      "size": 779,
+      "path": "D:\\multimodal_agent\\uploads\\files\\a7c3daabbee241af.png",
+      "created_at": "2026-05-17T16:00:44.646150+00:00"
+    },
+    "f462e8736be743de": {
+      "asset_id": "f462e8736be743de",
+      "origin_name": "ChatGPT Image 2026年5月17日 02_16_23.png",
+      "content_type": "image/png",
+      "ext": ".png",
+      "kind": "image",
+      "size": 2308014,
+      "path": "D:\\multimodal_agent\\uploads\\files\\f462e8736be743de.png",
+      "created_at": "2026-05-17T16:03:15.981073+00:00"
     }
   }
 }

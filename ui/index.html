@@ -1,46 +1,46 @@
-<!-- 该文件用于提供第一阶段最小可运行 Demo 前端。 -->
+<!-- 该文件用于提供第二阶段前端：上传、检测、深度、场景图、导出五按钮交互。 -->
 <!doctype html>
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Spatial-VLA Minimal Demo</title>
+  <title>Spatial Scene Graph Builder</title>
   <style>
     :root {
       --bg: #f4f8fb;
       --panel: #ffffff;
-      --line: #d7e2ee;
-      --ink: #1a2a40;
-      --sub: #617286;
+      --line: #d5e1ee;
+      --ink: #17263c;
+      --sub: #607085;
       --brand: #0b6a58;
-      --brand2: #104d86;
+      --brand2: #0f4f8a;
       --ok: #1f7b54;
-      --bad: #a34516;
+      --bad: #a54a18;
     }
     * { box-sizing: border-box; }
     body {
       margin: 0;
       color: var(--ink);
       background:
-        radial-gradient(900px 300px at 0% -10%, #dff2ff 0%, transparent 70%),
+        radial-gradient(900px 300px at 0% -10%, #e1f3ff 0%, transparent 70%),
         radial-gradient(900px 300px at 100% -10%, #e8fff6 0%, transparent 70%),
         var(--bg);
       font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
     }
-    .wrap { max-width: 1100px; margin: 20px auto; padding: 0 16px; }
+    .wrap { max-width: 1320px; margin: 18px auto; padding: 0 14px; }
     .hero {
+      padding: 14px 16px;
       border-radius: 14px;
-      padding: 16px;
       color: #fff;
       background: linear-gradient(130deg, var(--brand), var(--brand2));
-      box-shadow: 0 10px 24px rgba(8, 47, 92, 0.2);
+      box-shadow: 0 10px 24px rgba(12, 45, 86, 0.2);
     }
     .hero h1 { margin: 0; font-size: 22px; }
-    .hero p { margin: 8px 0 0 0; font-size: 13px; opacity: 0.93; }
+    .hero p { margin: 7px 0 0 0; font-size: 13px; opacity: 0.92; }
     .toolbar {
-      margin-top: 12px;
+      margin-top: 10px;
       display: grid;
-      grid-template-columns: repeat(4, 1fr);
+      grid-template-columns: repeat(5, 1fr);
       gap: 8px;
     }
     .btn {
@@ -52,17 +52,17 @@
       cursor: pointer;
       background: linear-gradient(130deg, var(--brand), var(--brand2));
     }
-    .btn.secondary { background: #6f8095; }
+    .btn:disabled { opacity: 0.6; cursor: not-allowed; }
     .status {
       margin-top: 8px;
       min-height: 18px;
       font-size: 12px;
-      color: var(--sub);
+      color: #e3f6ff;
     }
     .layout {
-      margin-top: 14px;
+      margin-top: 12px;
       display: grid;
-      grid-template-columns: 1fr 1fr;
+      grid-template-columns: 1.4fr 1fr;
       gap: 12px;
     }
     .card {
@@ -81,94 +81,144 @@
       border-bottom: 1px solid var(--line);
     }
     .body { padding: 10px; }
-    .image-box {
-      width: 100%;
-      height: 430px;
+    .scene-area {
+      display: grid;
+      grid-template-rows: auto auto;
+      gap: 10px;
+    }
+    .canvas-wrap {
       border: 1px dashed var(--line);
       border-radius: 10px;
+      background: #fcfeff;
+      min-height: 420px;
       display: flex;
       align-items: center;
       justify-content: center;
-      color: var(--sub);
-      background: #fbfdff;
+      overflow: auto;
+    }
+    canvas { max-width: 100%; height: auto; display: block; }
+    .depth-wrap {
+      border: 1px dashed var(--line);
+      border-radius: 10px;
+      background: #fcfeff;
+      min-height: 160px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
       overflow: hidden;
     }
-    .image-box img {
-      width: 100%;
-      height: 100%;
-      object-fit: contain;
-      background: #fff;
+    .depth-wrap img { max-width: 100%; max-height: 220px; object-fit: contain; }
+    .right {
+      display: grid;
+      grid-template-rows: 0.95fr 0.95fr 1.1fr;
+      gap: 12px;
     }
-    textarea {
-      width: 100%;
-      min-height: 100px;
-      padding: 9px 10px;
-      border-radius: 10px;
+    .list {
+      margin: 0;
+      padding: 0;
+      list-style: none;
+      display: grid;
+      gap: 6px;
+      max-height: 220px;
+      overflow: auto;
+    }
+    .item {
       border: 1px solid var(--line);
-      outline: none;
-      resize: vertical;
+      border-radius: 9px;
+      padding: 7px 8px;
+      cursor: pointer;
       background: #fbfdff;
-      color: var(--ink);
+      font-size: 13px;
     }
-    pre {
+    .item.active {
+      border-color: #2f7ab3;
+      box-shadow: 0 0 0 2px rgba(47, 122, 179, 0.16);
+      background: #f1f8ff;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12px;
+    }
+    th, td {
+      border: 1px solid var(--line);
+      padding: 6px;
+      text-align: left;
+    }
+    th { background: #f3f8fd; color: #2d4661; }
+    .mono {
       margin: 0;
       padding: 10px;
       border: 1px solid var(--line);
       border-radius: 10px;
-      background: #f7fbff;
+      background: #f8fbff;
       font-size: 12px;
       line-height: 1.45;
       white-space: pre-wrap;
       word-break: break-word;
+      max-height: 250px;
       overflow: auto;
     }
-    .stack { display: grid; gap: 10px; }
-    @media (max-width: 900px) {
-      .toolbar { grid-template-columns: 1fr 1fr; }
+    @media (max-width: 1120px) {
+      .toolbar { grid-template-columns: 1fr 1fr 1fr; }
       .layout { grid-template-columns: 1fr; }
-      .image-box { height: 300px; }
+      .right { grid-template-rows: auto auto auto; }
+      .canvas-wrap { min-height: 320px; }
     }
   </style>
 </head>
 <body>
   <div class="wrap">
     <section class="hero">
-      <h1>Spatial-VLA Minimal Demo</h1>
-      <p>Upload Image -> Analyze Scene -> Generate Plan</p>
+      <h1>Stage-2 Spatial Scene Graph Builder</h1>
+      <p>Upload Image -> Detect Objects -> Estimate Depth -> Build Scene Graph -> Export JSON</p>
       <div class="toolbar">
         <button class="btn" id="upload_btn">Upload Image</button>
-        <button class="btn" id="analyze_btn">Analyze Scene</button>
-        <button class="btn" id="plan_btn">Generate Plan</button>
-        <button class="btn secondary" id="reset_btn">Reset</button>
+        <button class="btn" id="detect_btn">Detect Objects</button>
+        <button class="btn" id="depth_btn">Estimate Depth</button>
+        <button class="btn" id="graph_btn">Build Scene Graph</button>
+        <button class="btn" id="export_btn">Export JSON</button>
       </div>
       <input id="file_input" type="file" accept="image/*" style="display:none;" />
-      <div class="status" id="status"></div>
+      <div class="status" id="status">Ready.</div>
     </section>
 
     <section class="layout">
       <article class="card">
-        <h3>Image Preview</h3>
-        <div class="body">
-          <div class="image-box" id="image_box">No image uploaded.</div>
+        <h3>Image + BBox Overlay + Depth Map</h3>
+        <div class="body scene-area">
+          <div class="canvas-wrap">
+            <canvas id="scene_canvas"></canvas>
+          </div>
+          <div class="depth-wrap" id="depth_wrap">Depth map not ready.</div>
         </div>
       </article>
-      <article class="card">
-        <h3>Task & Output</h3>
-        <div class="body stack">
-          <div>
-            <div style="font-size:12px;color:var(--sub);margin-bottom:5px;">Enter Task</div>
-            <textarea id="task_input" placeholder="Move the mug to the dining table.">Move the mug to the dining table.</textarea>
+
+      <section class="right">
+        <article class="card">
+          <h3>Object List</h3>
+          <div class="body">
+            <ul class="list" id="obj_list"></ul>
           </div>
-          <div>
-            <div style="font-size:12px;color:var(--sub);margin-bottom:5px;">Scene Description</div>
-            <pre id="analysis_box">-</pre>
+        </article>
+        <article class="card">
+          <h3>Scene Graph Table</h3>
+          <div class="body" style="overflow:auto;max-height:260px;">
+            <table>
+              <thead>
+                <tr><th>Subject</th><th>Relation</th><th>Object</th></tr>
+              </thead>
+              <tbody id="graph_table"></tbody>
+            </table>
           </div>
-          <div>
-            <div style="font-size:12px;color:var(--sub);margin-bottom:5px;">Action Plan</div>
-            <pre id="plan_box">-</pre>
+        </article>
+        <article class="card">
+          <h3>Object Detail Panel</h3>
+          <div class="body">
+            <pre class="mono" id="detail_box">No object selected.</pre>
           </div>
-        </div>
-      </article>
+        </article>
+      </section>
     </section>
   </div>
 
@@ -176,88 +226,264 @@
     const el = (id) => document.getElementById(id);
     const state = {
       assetId: "",
-      analysis: null,
-      objectUrl: ""
+      imageUrl: "",
+      imageElem: null,
+      objects: [],
+      imageSize: null,
+      depthByObj: {},
+      depthB64: "",
+      sceneGraph: null,
+      selectedId: ""
     };
 
     function setStatus(text, level = "normal") {
       const box = el("status");
       box.textContent = text || "";
-      if (level === "bad") box.style.color = "var(--bad)";
-      else if (level === "ok") box.style.color = "var(--ok)";
-      else box.style.color = "var(--sub)";
+      if (level === "bad") box.style.color = "#ffd5c0";
+      else if (level === "ok") box.style.color = "#d6ffe8";
+      else box.style.color = "#e3f6ff";
     }
 
-    function showImage(file) {
-      if (state.objectUrl) URL.revokeObjectURL(state.objectUrl);
-      state.objectUrl = URL.createObjectURL(file);
-      el("image_box").innerHTML = `<img src="${state.objectUrl}" alt="scene" />`;
+    function decodeName(name) {
+      return String(name || "").replaceAll("_", " ");
+    }
+
+    function drawCanvas() {
+      const canvas = el("scene_canvas");
+      const ctx = canvas.getContext("2d");
+      if (!state.imageElem) {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        return;
+      }
+      canvas.width = state.imageElem.naturalWidth;
+      canvas.height = state.imageElem.naturalHeight;
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(state.imageElem, 0, 0, canvas.width, canvas.height);
+
+      for (const obj of state.objects) {
+        const [x1, y1, x2, y2] = obj.bbox;
+        const active = obj.id === state.selectedId;
+        ctx.strokeStyle = active ? "#ff4d3d" : "#34f087";
+        ctx.lineWidth = active ? 4 : 2;
+        ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
+        ctx.fillStyle = "rgba(0,0,0,0.66)";
+        const title = `${obj.id}:${obj.name}`;
+        const w = Math.min(260, title.length * 8 + 8);
+        const tx = Math.max(1, x1);
+        const ty = Math.max(1, y1 - 16);
+        ctx.fillRect(tx, ty, w, 14);
+        ctx.fillStyle = "#ffffff";
+        ctx.font = "12px Segoe UI";
+        ctx.fillText(title, tx + 4, ty + 11);
+      }
+    }
+
+    function renderObjList() {
+      const root = el("obj_list");
+      root.innerHTML = "";
+      for (const obj of state.objects) {
+        const li = document.createElement("li");
+        li.className = "item" + (obj.id === state.selectedId ? " active" : "");
+        li.textContent = `${decodeName(obj.name)} (${obj.id})`;
+        li.onclick = () => {
+          state.selectedId = obj.id;
+          renderObjList();
+          drawCanvas();
+          renderDetail();
+        };
+        root.appendChild(li);
+      }
+    }
+
+    function renderDepth() {
+      const root = el("depth_wrap");
+      if (!state.depthB64) {
+        root.textContent = "Depth map not ready.";
+        return;
+      }
+      root.innerHTML = `<img src="data:image/png;base64,${state.depthB64}" alt="depth map"/>`;
+    }
+
+    function renderGraphTable() {
+      const body = el("graph_table");
+      body.innerHTML = "";
+      const rels = state.sceneGraph?.relations || [];
+      for (const rel of rels) {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `<td>${decodeName(rel.subject)}</td><td>${rel.relation}</td><td>${decodeName(rel.object)}</td>`;
+        body.appendChild(tr);
+      }
+    }
+
+    function renderDetail() {
+      const box = el("detail_box");
+      if (!state.selectedId) {
+        box.textContent = "No object selected.";
+        return;
+      }
+      const obj = state.objects.find((x) => x.id === state.selectedId);
+      if (!obj) {
+        box.textContent = "No object selected.";
+        return;
+      }
+      const depth = state.depthByObj[state.selectedId]?.avg_depth;
+      const graphObj = (state.sceneGraph?.objects || []).find((x) => x.id === state.selectedId);
+      const attrs = graphObj?.attributes || {};
+      const rels = (state.sceneGraph?.relations || []).filter((r) => r.subject === obj.name || r.object === obj.name);
+      const lines = [];
+      lines.push(`Object: ${decodeName(obj.name)}`);
+      lines.push(`ID: ${obj.id}`);
+      lines.push(`BBox: [${obj.bbox.join(", ")}]`);
+      lines.push(`Confidence: ${obj.confidence}`);
+      lines.push(`Depth: ${depth !== undefined ? depth : "-"}`);
+      lines.push("");
+      lines.push("Attributes:");
+      if (Object.keys(attrs).length === 0) {
+        lines.push("- (not built yet)");
+      } else {
+        for (const [k, v] of Object.entries(attrs)) lines.push(`- ${k}: ${v}`);
+      }
+      lines.push("");
+      lines.push("Relations:");
+      if (rels.length === 0) {
+        lines.push("- (not built yet)");
+      } else {
+        for (const r of rels) lines.push(`- ${r.subject} ${r.relation} ${r.object}`);
+      }
+      box.textContent = lines.join("\n");
     }
 
     async function uploadImage() {
       const file = el("file_input").files?.[0];
-      if (!file) {
-        setStatus("Please choose an image file first.", "bad");
-        return;
-      }
+      if (!file) throw new Error("Please choose an image file first.");
+
       const form = new FormData();
       form.append("file", file);
       setStatus("Uploading image...");
       const res = await fetch("/api/upload", { method: "POST", body: form });
       const data = await res.json();
       if (!data.ok) throw new Error(data.error || "upload failed");
+
       state.assetId = data.asset.asset_id;
-      state.analysis = null;
-      showImage(file);
-      el("analysis_box").textContent = "-";
-      el("plan_box").textContent = "-";
+      state.objects = [];
+      state.depthByObj = {};
+      state.depthB64 = "";
+      state.sceneGraph = null;
+      state.selectedId = "";
+      renderObjList();
+      renderDepth();
+      renderGraphTable();
+      renderDetail();
+
+      if (state.imageUrl) URL.revokeObjectURL(state.imageUrl);
+      state.imageUrl = URL.createObjectURL(file);
+      state.imageElem = new Image();
+      state.imageElem.onload = () => drawCanvas();
+      state.imageElem.src = state.imageUrl;
       setStatus("Image uploaded.", "ok");
     }
 
-    async function analyzeScene() {
+    async function detectObjects() {
       if (!state.assetId) throw new Error("Please upload image first.");
-      setStatus("Analyzing scene...");
-      const res = await fetch("/api/analyze", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ asset_id: state.assetId })
-      });
+      const startedAt = Date.now();
+      const timer = setInterval(() => {
+        const sec = Math.floor((Date.now() - startedAt) / 1000);
+        setStatus(`Detecting objects... ${sec}s`);
+      }, 1000);
+      let res;
+      try {
+        res = await fetch("/api/detect", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ asset_id: state.assetId })
+        });
+      } finally {
+        clearInterval(timer);
+      }
       const data = await res.json();
-      if (!data.ok) throw new Error(data.error || "analyze failed");
-      state.analysis = data.result.analysis;
-      el("analysis_box").textContent = state.analysis.room_description || JSON.stringify(state.analysis, null, 2);
-      setStatus("Scene analyzed.", "ok");
+      if (!data.ok) throw new Error(data.error || "detect failed");
+
+      state.objects = data.result.objects || [];
+      state.imageSize = data.result.image_size || null;
+      state.selectedId = state.objects.length ? state.objects[0].id : "";
+      renderObjList();
+      drawCanvas();
+      renderDetail();
+      setStatus(`Detect done. objects=${state.objects.length}`, "ok");
     }
 
-    async function generatePlan() {
+    async function estimateDepth() {
       if (!state.assetId) throw new Error("Please upload image first.");
-      if (!state.analysis) throw new Error("Please click Analyze Scene first.");
-      const task = el("task_input").value.trim();
-      if (!task) throw new Error("Task is empty.");
-      setStatus("Generating plan...");
-      const res = await fetch("/api/plan", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ asset_id: state.assetId, task, analysis: state.analysis })
-      });
+      if (!state.objects.length) throw new Error("Please click Detect Objects first.");
+      const startedAt = Date.now();
+      const timer = setInterval(() => {
+        const sec = Math.floor((Date.now() - startedAt) / 1000);
+        setStatus(`Estimating depth... ${sec}s`);
+      }, 1000);
+      let res;
+      try {
+        res = await fetch("/api/depth", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ asset_id: state.assetId, objects: state.objects })
+        });
+      } finally {
+        clearInterval(timer);
+      }
       const data = await res.json();
-      if (!data.ok) throw new Error(data.error || "plan failed");
-      const steps = data.result.action_plan?.plan_steps || [];
-      const lines = steps.map((s) => `${s.step}. ${s.description}`);
-      el("plan_box").textContent = lines.length ? lines.join("\n") : "-";
-      setStatus("Plan generated.", "ok");
+      if (!data.ok) throw new Error(data.error || "depth failed");
+      state.depthByObj = data.result.depth_by_object || {};
+      state.depthB64 = data.result.depth_b64 || "";
+      renderDepth();
+      renderDetail();
+      setStatus("Depth estimation done.", "ok");
     }
 
-    function resetAll() {
-      state.assetId = "";
-      state.analysis = null;
-      if (state.objectUrl) URL.revokeObjectURL(state.objectUrl);
-      state.objectUrl = "";
-      el("image_box").textContent = "No image uploaded.";
-      el("analysis_box").textContent = "-";
-      el("plan_box").textContent = "-";
-      el("task_input").value = "Move the mug to the dining table.";
-      setStatus("Reset done.", "ok");
+    async function buildGraph() {
+      if (!state.objects.length) throw new Error("Please click Detect Objects first.");
+      if (!Object.keys(state.depthByObj).length) throw new Error("Please click Estimate Depth first.");
+      if (!state.imageSize) throw new Error("Missing image size from detect step.");
+      setStatus("Building scene graph...");
+      const payload = {
+        objects: state.objects,
+        depth_by_object: state.depthByObj,
+        image_size: state.imageSize
+      };
+      const res = await fetch("/api/graph", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      const data = await res.json();
+      if (!data.ok) throw new Error(data.error || "graph failed");
+      state.sceneGraph = data.result.scene_graph;
+      renderGraphTable();
+      renderDetail();
+      setStatus("Scene graph built.", "ok");
+    }
+
+    async function exportJson() {
+      if (!state.sceneGraph) throw new Error("Please click Build Scene Graph first.");
+      setStatus("Exporting JSON...");
+      const res = await fetch("/api/export", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ scene_graph: state.sceneGraph })
+      });
+      const data = await res.json();
+      if (!data.ok) throw new Error(data.error || "export failed");
+      const name = data.result.file_name || "scene_graph.json";
+      const text = JSON.stringify(data.result.content || {}, null, 2);
+      const blob = new Blob([text], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = name;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      setStatus("JSON exported.", "ok");
     }
 
     function withGuard(fn) {
@@ -270,12 +496,12 @@
       };
     }
 
-    el("upload_btn").addEventListener("click", () => el("file_input").click());
+    el("upload_btn").onclick = () => el("file_input").click();
     el("file_input").addEventListener("change", withGuard(uploadImage));
-    el("analyze_btn").addEventListener("click", withGuard(analyzeScene));
-    el("plan_btn").addEventListener("click", withGuard(generatePlan));
-    el("reset_btn").addEventListener("click", resetAll);
-    setStatus("Ready.");
+    el("detect_btn").addEventListener("click", withGuard(detectObjects));
+    el("depth_btn").addEventListener("click", withGuard(estimateDepth));
+    el("graph_btn").addEventListener("click", withGuard(buildGraph));
+    el("export_btn").addEventListener("click", withGuard(exportJson));
   </script>
 </body>
 </html>

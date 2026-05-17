@@ -1,312 +1,420 @@
-# 该文件用于实现 Demo 流程中的核心能力：场景分析、场景图构建、动作计划与计划校验。
+# 该文件用于实现第二阶段核心能力：开放词表检测、深度估计、空间关系推断与 Scene Graph 生成。
 import base64
-import json
-import mimetypes
+import io
+import math
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List
-from urllib import error, request
+from typing import Any, Dict, List, Tuple
+
+import numpy as np
+from PIL import Image, ImageDraw
 
 
-ALLOWED_ACTIONS = {
-    "navigate",
-    "detect",
-    "grasp",
-    "move",
-    "place",
-    "verify",
-    "avoid",
+CLASSES = [
+    "sofa",
+    "coffee table",
+    "dining table",
+    "chair",
+    "laptop",
+    "mug",
+    "plant",
+    "tv",
+    "shelf",
+    "book",
+    "bottle",
+    "remote control",
+    "cabinet",
+    "floor",
+]
+
+NAME_MAP = {
+    "sofa": "sofa",
+    "coffee table": "coffee_table",
+    "dining table": "dining_table",
+    "chair": "chair",
+    "laptop": "laptop",
+    "mug": "mug",
+    "plant": "plant",
+    "tv": "tv",
+    "shelf": "shelf",
+    "book": "book",
+    "bottle": "bottle",
+    "remote control": "remote_control",
+    "cabinet": "cabinet",
+    "floor": "floor",
 }
 
-
-# 该函数用于去除模型输出中的 Markdown 代码块包裹。
-def strip_code_fence(text: str) -> str:
-    raw = text.strip()
-    if raw.startswith("```"):
-        lines = raw.splitlines()
-        if len(lines) >= 2 and lines[-1].strip() == "```":
-            return "\n".join(lines[1:-1]).strip()
-    return raw
+MOVABLE = {"mug", "bottle", "book", "remote_control"}
+GRASPABLE = {"mug", "bottle", "remote_control"}
+PLACEABLE = {"coffee_table", "dining_table", "shelf", "cabinet"}
+FRAGILE = {"laptop", "tv"}
+LIQUID_RISK = {"mug", "bottle"}
+CONTAINER = {"mug", "bottle"}
 
 
-# 该函数用于从混合文本中提取首个 JSON 对象或数组。
-def extract_json_text(text: str) -> str | None:
-    start_obj = text.find("{")
-    end_obj = text.rfind("}")
-    if start_obj >= 0 and end_obj > start_obj:
-        return text[start_obj : end_obj + 1]
-    start_arr = text.find("[")
-    end_arr = text.rfind("]")
-    if start_arr >= 0 and end_arr > start_arr:
-        return text[start_arr : end_arr + 1]
-    return None
+@dataclass
+class Obj:
+    id: str
+    name: str
+    bbox: List[int]
+    confidence: float
+    avg_depth: float = 0.0
 
 
-# 该函数用于严格解析模型返回的 JSON，解析失败直接报错。
-def parse_json_strict(text: str) -> Any:
-    clean = strip_code_fence(text)
-    try:
-        return json.loads(clean)
-    except json.JSONDecodeError:
-        chunk = extract_json_text(clean)
-        if chunk is None:
-            preview = clean[:240].replace("\n", " ")
-            raise RuntimeError(f"模型返回不是合法 JSON，内容片段: {preview}")
-        try:
-            return json.loads(chunk)
-        except json.JSONDecodeError as exc:
-            preview = clean[:240].replace("\n", " ")
-            raise RuntimeError(f"模型 JSON 解析失败: {exc}. 内容片段: {preview}") from exc
+# 该函数用于把图像编码为 base64 PNG 文本。
+def image_b64(image: Image.Image) -> str:
+    buf = io.BytesIO()
+    image.save(buf, format="PNG")
+    return base64.b64encode(buf.getvalue()).decode("ascii")
 
 
-# 该函数用于把本地图片编码为 data URL。
-def encode_image(image_path: str) -> str:
-    path = Path(image_path)
-    if not path.exists():
-        raise FileNotFoundError(f"图片不存在: {image_path}")
-    mime, _ = mimetypes.guess_type(str(path))
-    if not mime:
-        mime = "image/jpeg"
-    raw = path.read_bytes()
-    b64 = base64.b64encode(raw).decode("ascii")
-    return f"data:{mime};base64,{b64}"
+# 该函数用于读取上传图像并统一转为 RGB。
+def load_rgb(path: str) -> Image.Image:
+    file = Path(path)
+    if not file.exists():
+        raise FileNotFoundError(f"图片不存在: {path}")
+    return Image.open(file).convert("RGB")
 
 
-# 该函数用于把对象标签规范成可读 ID。
-def make_oid(label: str, index: int) -> str:
-    safe = label.strip().lower().replace(" ", "_").replace("-", "_")
-    safe = "".join(ch for ch in safe if ch.isalnum() or ch == "_").strip("_")
-    if not safe:
-        safe = "object"
-    return f"{safe}_{index + 1}"
+# 该函数用于把标签标准化为固定类别名。
+def normalize_label(label: str) -> str:
+    raw = str(label).strip().lower().replace("-", " ")
+    raw = " ".join(raw.split())
+    if raw in NAME_MAP:
+        return NAME_MAP[raw]
+    for key, value in NAME_MAP.items():
+        if key in raw:
+            return value
+    return raw.replace(" ", "_")
 
 
-# 该函数用于把任意对象值标准化为字符串列表。
-def to_string_list(value: Any) -> List[str]:
-    if isinstance(value, list):
-        return [str(v).strip() for v in value if str(v).strip()]
-    if isinstance(value, str) and value.strip():
-        return [value.strip()]
-    return []
+# 该函数用于计算两个 bbox 的 IoU。
+def iou(a: List[int], b: List[int]) -> float:
+    ax1, ay1, ax2, ay2 = a
+    bx1, by1, bx2, by2 = b
+    ix1, iy1 = max(ax1, bx1), max(ay1, by1)
+    ix2, iy2 = min(ax2, bx2), min(ay2, by2)
+    iw, ih = max(0, ix2 - ix1), max(0, iy2 - iy1)
+    inter = iw * ih
+    area_a = max(1, (ax2 - ax1) * (ay2 - ay1))
+    area_b = max(1, (bx2 - bx1) * (by2 - by1))
+    union = area_a + area_b - inter
+    return float(inter / union) if union > 0 else 0.0
+
+
+# 该函数用于将检测结果按类别做简单 NMS 去重。
+def class_nms(items: List[Dict[str, Any]], thr: float = 0.55) -> List[Dict[str, Any]]:
+    keep: List[Dict[str, Any]] = []
+    for item in sorted(items, key=lambda x: float(x["score"]), reverse=True):
+        ok = True
+        for saved in keep:
+            if item["name"] == saved["name"] and iou(item["bbox"], saved["bbox"]) > thr:
+                ok = False
+                break
+        if ok:
+            keep.append(item)
+    return keep
+
+
+# 该函数用于绘制 bbox 叠加图。
+def draw_boxes(image: Image.Image, objs: List[Obj]) -> Image.Image:
+    canvas = image.copy()
+    draw = ImageDraw.Draw(canvas)
+    for obj in objs:
+        x1, y1, x2, y2 = obj.bbox
+        draw.rectangle([x1, y1, x2, y2], outline=(40, 255, 120), width=3)
+        title = f"{obj.id}:{obj.name} {obj.confidence:.2f}"
+        tx = max(2, x1)
+        ty = max(2, y1 - 16)
+        draw.rectangle([tx, ty, tx + min(320, len(title) * 8 + 8), ty + 14], fill=(0, 0, 0))
+        draw.text((tx + 3, ty + 1), title, fill=(255, 255, 255))
+    return canvas
+
+
+# 该函数用于把浮点深度图标准化到 0~1。
+def normalize_map(depth: np.ndarray) -> np.ndarray:
+    arr = depth.astype(np.float32)
+    lo = float(arr.min())
+    hi = float(arr.max())
+    if hi - lo < 1e-6:
+        return np.zeros_like(arr, dtype=np.float32)
+    return (arr - lo) / (hi - lo)
+
+
+# 该函数用于约束 bbox 在图像范围内。
+def clamp_box(box: List[int], w: int, h: int) -> List[int]:
+    x1, y1, x2, y2 = box
+    x1 = max(0, min(w - 1, int(x1)))
+    y1 = max(0, min(h - 1, int(y1)))
+    x2 = max(0, min(w, int(x2)))
+    y2 = max(0, min(h, int(y2)))
+    if x2 <= x1:
+        x2 = min(w, x1 + 1)
+    if y2 <= y1:
+        y2 = min(h, y1 + 1)
+    return [x1, y1, x2, y2]
+
+
+# 该函数用于计算 bbox 中心点。
+def box_center(box: List[int]) -> Tuple[float, float]:
+    x1, y1, x2, y2 = box
+    return (x1 + x2) / 2.0, (y1 + y2) / 2.0
+
+
+# 该函数用于计算两个 bbox 的边界距离（像素）。
+def box_gap(a: List[int], b: List[int]) -> float:
+    ax1, ay1, ax2, ay2 = a
+    bx1, by1, bx2, by2 = b
+    dx = max(0, max(bx1 - ax2, ax1 - bx2))
+    dy = max(0, max(by1 - ay2, ay1 - by2))
+    return float(math.sqrt(dx * dx + dy * dy))
+
+
+# 该函数用于根据类别补充对象属性。
+def obj_attrs(name: str) -> Dict[str, bool]:
+    return {
+        "movable": name in MOVABLE,
+        "graspable": name in GRASPABLE,
+        "placeable": name in PLACEABLE,
+        "fragile": name in FRAGILE,
+        "electronic": name in FRAGILE,
+        "container": name in CONTAINER,
+        "liquid_risk": name in LIQUID_RISK,
+    }
 
 
 class SpatialDemoCore:
-    # 该函数用于初始化模型调用参数。
-    def __init__(self, api_base: str, api_key: str, model: str, timeout: int) -> None:
-        if not api_base:
-            raise ValueError("api_base 不能为空。")
-        if not api_key:
-            raise ValueError("api_key 不能为空。")
-        if not model:
-            raise ValueError("model 不能为空。")
-        self.api_base = api_base.rstrip("/")
-        self.api_key = api_key
-        self.model = model
-        self.timeout = int(timeout)
+    # 该函数用于初始化检测与深度模型参数。
+    def __init__(self, detector_model: str, depth_model: str, box_thr: float, text_thr: float) -> None:
+        self.detector_model = detector_model
+        self.depth_model = depth_model
+        self.box_thr = float(box_thr)
+        self.text_thr = float(text_thr)
+        self._detector = None
+        self._depth = None
 
-    # 该函数用于调用 OpenAI 兼容接口并返回纯文本内容。
-    def chat(self, payload: Dict[str, Any]) -> str:
-        endpoint = f"{self.api_base}/chat/completions"
-        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-        headers = {"Content-Type": "application/json", "Authorization": f"Bearer {self.api_key}"}
-        req = request.Request(endpoint, data=body, headers=headers, method="POST")
+    # 该函数用于确保本地安装了第二阶段所需依赖。
+    def ensure_deps(self) -> None:
         try:
-            with request.urlopen(req, timeout=self.timeout) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
-        except error.HTTPError as exc:
-            text = exc.read().decode("utf-8", errors="ignore")
-            raise RuntimeError(f"模型接口调用失败: {exc.code} {text}") from exc
-        except error.URLError as exc:
-            raise RuntimeError(f"模型接口网络错误: {exc.reason}") from exc
+            import torch  # noqa: F401
+            import transformers  # noqa: F401
+        except Exception as exc:
+            raise RuntimeError(
+                "缺少依赖 torch/transformers。请先安装后再运行第二阶段（模型下载体积较大，请先确认）。"
+            ) from exc
 
-        choices = data.get("choices", [])
-        if not choices:
-            raise RuntimeError("模型接口返回为空。")
-        message = choices[0].get("message", {})
-        content = message.get("content", "")
-        if isinstance(content, str):
-            return content
-        if isinstance(content, list):
-            chunks: List[str] = []
-            for part in content:
-                if isinstance(part, dict) and part.get("type") in {"text", "output_text"}:
-                    chunks.append(str(part.get("text", "")))
-            text = "\n".join(chunks).strip()
-            if text:
-                return text
-        raise RuntimeError("模型返回内容格式不支持。")
+    # 该函数用于懒加载 Grounding DINO 检测管线。
+    def detector(self):
+        if self._detector is not None:
+            return self._detector
+        self.ensure_deps()
+        from transformers import pipeline
 
-    # 该函数用于调用模型做场景理解，输出描述、物体与关系。
-    def analyze_scene(self, image_path: str) -> Dict[str, Any]:
-        image_url = encode_image(image_path)
-        payload = self.build_analyze_payload(image_url=image_url)
-        raw = self.chat(payload)
-        parsed = parse_json_strict(raw)
-        return self.normalize_analysis(parsed)
+        self._detector = pipeline(task="zero-shot-object-detection", model=self.detector_model)
+        return self._detector
 
-    # 该函数用于基于图片、任务和上下文（分析结果或场景图）生成动作计划。
-    def generate_action_plan(self, image_path: str, task: str, context: Dict[str, Any]) -> Dict[str, Any]:
-        if not task.strip():
-            raise ValueError("任务不能为空。")
-        if not isinstance(context, dict) or not context:
-            raise ValueError("动作计划需要 context（analysis 或 scene_graph）。")
-        image_url = encode_image(image_path)
-        payload = self.build_plan_payload(image_url=image_url, task=task, context=context)
-        raw = self.chat(payload)
-        parsed = parse_json_strict(raw)
-        return self.normalize_plan(parsed)
+    # 该函数用于懒加载 Depth Anything 深度估计管线。
+    def depth_pipe(self):
+        if self._depth is not None:
+            return self._depth
+        self.ensure_deps()
+        from transformers import pipeline
 
-    # 该函数用于构建场景分析请求。
-    def build_analyze_payload(self, image_url: str) -> Dict[str, Any]:
-        instruction = (
-            "Analyze this indoor scene and return JSON only. "
-            "Schema: {"
-            "\"room_description\":\"...\","
-            "\"objects\":[{\"id\":\"mug_1\",\"label\":\"mug\",\"attributes\":[\"graspable\"]}],"
-            "\"relations\":[{\"source\":\"mug_1\",\"relation\":\"on\",\"target\":\"coffee_table_1\"}]"
-            "}. "
-            "Use concise English. Keep id stable and object-centric."
-        )
-        return {
-            "model": self.model,
-            "temperature": 0,
-            "response_format": {"type": "json_object"},
-            "messages": [
-                {"role": "system", "content": "You are a spatial scene parser for robotics."},
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": instruction},
-                        {"type": "image_url", "image_url": {"url": image_url}},
-                    ],
-                },
-            ],
-        }
+        self._depth = pipeline(task="depth-estimation", model=self.depth_model)
+        return self._depth
 
-    # 该函数用于构建动作计划请求。
-    def build_plan_payload(self, image_url: str, task: str, context: Dict[str, Any]) -> Dict[str, Any]:
-        context_text = json.dumps(context, ensure_ascii=False)
-        instruction = (
-            "You are a robot task planner. Return JSON only. "
-            "Schema: {"
-            "\"plan_summary\":\"...\","
-            "\"plan_steps\":["
-            "{\"step\":1,\"action\":\"navigate\",\"target\":\"coffee_table_1\",\"reference\":\"\",\"description\":\"Navigate to the coffee table\"}"
-            "]}. "
-            "Allowed actions: navigate, detect, grasp, move, place, verify, avoid. "
-            "Use object ids from context when possible."
-        )
-        user_text = f"Task: {task}\nContext: {context_text}"
-        return {
-            "model": self.model,
-            "temperature": 0,
-            "response_format": {"type": "json_object"},
-            "messages": [
-                {"role": "system", "content": "You generate executable robot plans from images and scene graphs."},
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": instruction},
-                        {"type": "text", "text": user_text},
-                        {"type": "image_url", "image_url": {"url": image_url}},
-                    ],
-                },
-            ],
-        }
+    # 该函数用于执行第一步物体检测并返回结构化结果与叠加图。
+    def detect_objects(self, image_path: str) -> Dict[str, Any]:
+        image = load_rgb(image_path)
+        pipe = self.detector()
+        raw = pipe(image, candidate_labels=CLASSES, threshold=self.box_thr)
 
-    # 该函数用于把模型分析结果标准化并做严格校验。
-    def normalize_analysis(self, payload: Any) -> Dict[str, Any]:
-        if not isinstance(payload, dict):
-            raise RuntimeError("场景分析返回格式错误：必须是 JSON 对象。")
-        room = str(payload.get("room_description", payload.get("description", ""))).strip()
-        if not room:
-            raise RuntimeError("场景分析缺少 room_description。")
-
-        raw_objects = payload.get("objects", payload.get("items", []))
-        if not isinstance(raw_objects, list) or not raw_objects:
-            raise RuntimeError("场景分析缺少 objects。")
-        objects: List[Dict[str, Any]] = []
-        label_to_id: Dict[str, str] = {}
-
-        for idx, item in enumerate(raw_objects):
-            if not isinstance(item, dict):
+        parsed: List[Dict[str, Any]] = []
+        for item in raw:
+            name = normalize_label(item.get("label", ""))
+            box_raw = item.get("box", {})
+            if not isinstance(box_raw, dict):
                 continue
-            label = str(item.get("label", item.get("name", ""))).strip().lower()
-            if not label:
+            bbox = [
+                int(round(float(box_raw.get("xmin", 0)))),
+                int(round(float(box_raw.get("ymin", 0)))),
+                int(round(float(box_raw.get("xmax", 0)))),
+                int(round(float(box_raw.get("ymax", 0)))),
+            ]
+            bbox = clamp_box(bbox, image.width, image.height)
+            score = float(item.get("score", 0.0))
+            if score < self.box_thr:
                 continue
-            oid = str(item.get("id", item.get("oid", ""))).strip().lower()
-            if not oid:
-                oid = make_oid(label, idx)
-            attrs = to_string_list(item.get("attributes", item.get("affordance", [])))
-            obj = {"id": oid, "label": label, "attributes": attrs}
-            objects.append(obj)
-            label_to_id[label] = oid
+            parsed.append({"name": name, "bbox": bbox, "score": score})
 
-        if not objects:
-            raise RuntimeError("场景分析 objects 无有效内容。")
+        parsed = class_nms(parsed, thr=0.55)
+        objs = [
+            Obj(id=f"obj_{idx + 1}", name=det["name"], bbox=det["bbox"], confidence=round(float(det["score"]), 4))
+            for idx, det in enumerate(parsed)
+        ]
 
-        raw_relations = payload.get("relations", payload.get("triples", []))
-        relations: List[Dict[str, str]] = []
-        if isinstance(raw_relations, list):
-            for item in raw_relations:
-                norm = self.normalize_relation(item=item, label_to_id=label_to_id)
-                if norm is not None:
-                    relations.append(norm)
-
-        if not relations:
-            raise RuntimeError("场景分析缺少 relations。")
-
-        relations_text = [f"{r['source']} -> {r['relation']} -> {r['target']}" for r in relations]
+        overlay = draw_boxes(image=image, objs=objs)
         return {
-            "room_description": room,
-            "objects": objects,
-            "relations": relations,
-            "relations_text": relations_text,
-        }
-
-    # 该函数用于标准化单条关系三元组。
-    def normalize_relation(self, item: Any, label_to_id: Dict[str, str]) -> Dict[str, str] | None:
-        if not isinstance(item, dict):
-            return None
-        source = str(item.get("source", item.get("from", ""))).strip().lower()
-        relation = str(item.get("relation", item.get("predicate", ""))).strip().lower()
-        target = str(item.get("target", item.get("to", ""))).strip().lower()
-        if not source or not relation or not target:
-            return None
-
-        source = label_to_id.get(source, source)
-        target = label_to_id.get(target, target)
-        return {"source": source, "relation": relation, "target": target}
-
-    # 该函数用于把模型计划结果标准化并做严格校验。
-    def normalize_plan(self, payload: Any) -> Dict[str, Any]:
-        if not isinstance(payload, dict):
-            raise RuntimeError("动作计划返回格式错误：必须是 JSON 对象。")
-        summary = str(payload.get("plan_summary", payload.get("summary", ""))).strip()
-        raw_steps = payload.get("plan_steps", payload.get("steps", []))
-        if not isinstance(raw_steps, list) or not raw_steps:
-            raise RuntimeError("动作计划缺少 plan_steps。")
-
-        plan_steps: List[Dict[str, Any]] = []
-        for idx, item in enumerate(raw_steps):
-            if not isinstance(item, dict):
-                continue
-            action = str(item.get("action", "")).strip().lower()
-            if action not in ALLOWED_ACTIONS:
-                raise RuntimeError(f"动作计划包含不支持的 action: {action}")
-            target = str(item.get("target", "")).strip().lower()
-            reference = str(item.get("reference", "")).strip().lower()
-            desc = str(item.get("description", item.get("note", ""))).strip()
-            step_no = int(item.get("step", idx + 1))
-            plan_steps.append(
+            "objects": [
                 {
-                    "step": step_no,
-                    "action": action,
-                    "target": target,
-                    "reference": reference,
-                    "description": desc or action,
+                    "id": obj.id,
+                    "name": obj.name,
+                    "bbox": obj.bbox,
+                    "confidence": obj.confidence,
                 }
-            )
+                for obj in objs
+            ],
+            "overlay_b64": image_b64(overlay),
+            "image_size": {"width": image.width, "height": image.height},
+        }
 
-        if not plan_steps:
-            raise RuntimeError("动作计划 plan_steps 无有效内容。")
-        return {"plan_summary": summary, "plan_steps": plan_steps}
+    # 该函数用于执行第二步深度估计并返回深度图与每个物体平均深度。
+    def estimate_depth(self, image_path: str, objects: List[Dict[str, Any]]) -> Dict[str, Any]:
+        image = load_rgb(image_path)
+        pipe = self.depth_pipe()
+        result = pipe(image)
+
+        arr = self.extract_depth(result)
+        norm = normalize_map(arr)
+        distance = 1.0 - norm
+        depth_img = Image.fromarray((norm * 255.0).astype(np.uint8), mode="L")
+
+        entries: Dict[str, Dict[str, Any]] = {}
+        for item in objects:
+            oid = str(item.get("id", "")).strip()
+            name = str(item.get("name", "")).strip()
+            box = item.get("bbox", [])
+            if not oid or not isinstance(box, list) or len(box) != 4:
+                continue
+            x1, y1, x2, y2 = clamp_box([int(v) for v in box], image.width, image.height)
+            roi = distance[y1:y2, x1:x2]
+            avg = float(roi.mean()) if roi.size > 0 else float(distance.mean())
+            entries[oid] = {"name": name, "avg_depth": round(avg, 4)}
+
+        return {"depth_b64": image_b64(depth_img), "depth_by_object": entries}
+
+    # 该函数用于从深度模型输出中提取二维深度数组。
+    def extract_depth(self, result: Any) -> np.ndarray:
+        if isinstance(result, dict):
+            if "depth" in result and isinstance(result["depth"], Image.Image):
+                return np.array(result["depth"]).astype(np.float32)
+            if "predicted_depth" in result:
+                pred = result["predicted_depth"]
+                try:
+                    return pred.squeeze().detach().cpu().numpy().astype(np.float32)
+                except Exception:
+                    pass
+        raise RuntimeError("深度模型输出格式无法解析。")
+
+    # 该函数用于执行第三步空间关系推断并输出完整 Scene Graph。
+    def build_scene_graph(self, objects: List[Dict[str, Any]], depth_by_object: Dict[str, Any], image_size: Dict[str, Any]) -> Dict[str, Any]:
+        if not objects:
+            raise ValueError("objects 不能为空。")
+        w = int(image_size.get("width", 0))
+        h = int(image_size.get("height", 0))
+        if w <= 0 or h <= 0:
+            raise ValueError("image_size 非法。")
+
+        nodes: List[Obj] = []
+        for item in objects:
+            oid = str(item.get("id", "")).strip()
+            name = normalize_label(str(item.get("name", "")))
+            box = item.get("bbox", [])
+            conf = float(item.get("confidence", 0.0))
+            if not oid or not isinstance(box, list) or len(box) != 4:
+                continue
+            dep = float(depth_by_object.get(oid, {}).get("avg_depth", 0.5))
+            nodes.append(Obj(id=oid, name=name, bbox=clamp_box([int(v) for v in box], w, h), confidence=conf, avg_depth=dep))
+
+        if not nodes:
+            raise RuntimeError("objects 无有效内容。")
+
+        relations = self.infer_relations(nodes=nodes, w=w, h=h)
+        graph = {
+            "objects": [
+                {
+                    "id": n.id,
+                    "name": n.name,
+                    "bbox": n.bbox,
+                    "avg_depth": round(float(n.avg_depth), 4),
+                    "attributes": obj_attrs(n.name),
+                }
+                for n in nodes
+            ],
+            "relations": [
+                {
+                    "subject": r["subject"],
+                    "relation": r["relation"],
+                    "object": r["object"],
+                    "confidence": round(float(r["confidence"]), 4),
+                }
+                for r in relations
+            ],
+        }
+        return graph
+
+    # 该函数用于根据 bbox 与深度做规则空间关系推断。
+    def infer_relations(self, nodes: List[Obj], w: int, h: int) -> List[Dict[str, Any]]:
+        rels: List[Dict[str, Any]] = []
+        diag = math.sqrt(float(w * w + h * h))
+        seen = set()
+
+        for i, a in enumerate(nodes):
+            for j, b in enumerate(nodes):
+                if i == j:
+                    continue
+                ax1, ay1, ax2, ay2 = a.bbox
+                bx1, by1, bx2, by2 = b.bbox
+                acx, acy = box_center(a.bbox)
+                bcx, bcy = box_center(b.bbox)
+
+                # left_of / right_of
+                dx = acx - bcx
+                if abs(dx) > 12:
+                    if dx < 0:
+                        self.add_rel(rels, seen, a.name, "left_of", b.name, min(0.95, 0.55 + abs(dx) / max(w, 1)))
+                    else:
+                        self.add_rel(rels, seen, a.name, "right_of", b.name, min(0.95, 0.55 + abs(dx) / max(w, 1)))
+
+                # above / below
+                dy = acy - bcy
+                if abs(dy) > 12:
+                    if dy < 0:
+                        self.add_rel(rels, seen, a.name, "above", b.name, min(0.92, 0.52 + abs(dy) / max(h, 1)))
+                    else:
+                        self.add_rel(rels, seen, a.name, "below", b.name, min(0.92, 0.52 + abs(dy) / max(h, 1)))
+
+                # near
+                gap = box_gap(a.bbox, b.bbox)
+                if gap / max(diag, 1.0) < 0.12:
+                    self.add_rel(rels, seen, a.name, "near", b.name, min(0.9, 0.75 - gap / max(diag, 1.0)))
+
+                # on + supports
+                height_b = max(1, by2 - by1)
+                gap_y = abs(ay2 - by1)
+                in_x = bx1 <= acx <= bx2
+                if in_x and gap_y <= max(10, int(0.12 * height_b)) and ay2 <= by2:
+                    self.add_rel(rels, seen, a.name, "on", b.name, 0.78)
+                    self.add_rel(rels, seen, b.name, "supports", a.name, 0.78)
+
+                # inside
+                if ax1 >= bx1 and ay1 >= by1 and ax2 <= bx2 and ay2 <= by2:
+                    self.add_rel(rels, seen, a.name, "inside", b.name, 0.73)
+
+                # in_front_of / behind
+                dd = float(a.avg_depth - b.avg_depth)
+                if abs(dd) > 0.06:
+                    if dd < 0:
+                        self.add_rel(rels, seen, a.name, "in_front_of", b.name, min(0.95, 0.62 + abs(dd)))
+                    else:
+                        self.add_rel(rels, seen, a.name, "behind", b.name, min(0.95, 0.62 + abs(dd)))
+
+        return rels
+
+    # 该函数用于写入去重后的关系记录。
+    def add_rel(self, rels: List[Dict[str, Any]], seen: set, subj: str, rel: str, obj: str, conf: float) -> None:
+        key = (subj, rel, obj)
+        if key in seen:
+            return
+        seen.add(key)
+        rels.append({"subject": subj, "relation": rel, "object": obj, "confidence": float(conf)})

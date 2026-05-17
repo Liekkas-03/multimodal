@@ -1,4 +1,4 @@
-# 该文件用于提供第一阶段最小可运行 Demo 的后端 API（默认挂在 /v1）。
+# 该文件用于提供第二阶段后端 API：上传、检测、深度、场景图、导出。
 import argparse
 import cgi
 import json
@@ -12,7 +12,7 @@ from front import FrontService, asset_public
 
 # 该函数用于解析后端服务启动参数。
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Spatial-VLA Minimal Backend API")
+    parser = argparse.ArgumentParser(description="Spatial-VLA Stage2 Backend API")
     parser.add_argument("--host", type=str, default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8000)
     parser.add_argument("--config", type=str, default="config.toml")
@@ -73,7 +73,13 @@ class ApiHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         path = urlparse(self.path).path
         if path in {"/v1", "/v1/"}:
-            self.send_json(200, {"ok": True, "routes": ["/v1/upload", "/v1/analyze", "/v1/plan"]})
+            self.send_json(
+                200,
+                {
+                    "ok": True,
+                    "routes": ["/v1/upload", "/v1/detect", "/v1/depth", "/v1/graph", "/v1/export"],
+                },
+            )
             return
         self.send_json(404, {"ok": False, "error": "not found"})
 
@@ -90,11 +96,17 @@ class ApiHandler(BaseHTTPRequestHandler):
                 self.send_json(200, {"ok": True, "asset": asset_public(meta)})
                 return
             payload = self.read_json()
-            if path == "/v1/analyze":
-                self.send_json(200, {"ok": True, "result": self.service.analyze(payload)})
+            if path == "/v1/detect":
+                self.send_json(200, {"ok": True, "result": self.service.detect(payload)})
                 return
-            if path == "/v1/plan":
-                self.send_json(200, {"ok": True, "result": self.service.plan(payload)})
+            if path == "/v1/depth":
+                self.send_json(200, {"ok": True, "result": self.service.depth(payload)})
+                return
+            if path == "/v1/graph":
+                self.send_json(200, {"ok": True, "result": self.service.graph(payload)})
+                return
+            if path == "/v1/export":
+                self.send_json(200, {"ok": True, "result": self.service.export(payload)})
                 return
             self.send_json(404, {"ok": False, "error": "not found"})
         except Exception as exc:

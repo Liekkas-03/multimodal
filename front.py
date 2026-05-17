@@ -1,11 +1,12 @@
-# 该文件用于提供第一阶段最小可运行 Demo 的前端服务与最小 API 路由。
+# 该文件用于提供第二阶段前端服务：上传、检测、深度、场景图、导出五步 API。
 import argparse
 import cgi
 import json
 import mimetypes
+import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Tuple
 from urllib.parse import urlparse
 
 from asset_store import get_asset, save_asset
@@ -19,7 +20,7 @@ UI_DIR = ROOT / "ui"
 
 # 该函数用于解析前端服务启动参数。
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Spatial-VLA Minimal Frontend Server")
+    parser = argparse.ArgumentParser(description="Spatial-VLA Stage2 Frontend Server")
     parser.add_argument("--host", type=str, default="127.0.0.1")
     parser.add_argument("--port", type=int, default=7860)
     parser.add_argument("--config", type=str, default="config.toml")
@@ -43,58 +44,85 @@ class FrontService:
     # 该函数用于初始化服务并读取模型配置。
     def __init__(self, config_path: str) -> None:
         conf = load_config(config_path)
-        self.api_base = str(get_config_value(conf, "vision", "api_base", ""))
-        self.api_key = str(get_config_value(conf, "vision", "api_key", ""))
-        self.model = str(get_config_value(conf, "vision", "model", ""))
-        self.timeout = int(get_config_value(conf, "vision", "timeout", 90))
+        self.detector_model = str(get_config_value(conf, "models", "detector_model", "IDEA-Research/grounding-dino-tiny"))
+        self.depth_model = str(get_config_value(conf, "models", "depth_model", "depth-anything/Depth-Anything-V2-Small-hf"))
+        self.box_thr = float(get_config_value(conf, "models", "detector_box_threshold", 0.25))
+        self.text_thr = float(get_config_value(conf, "models", "detector_text_threshold", 0.25))
 
-    # 该函数用于构建核心模型调用器。
-    def core(self) -> SpatialDemoCore:
-        return SpatialDemoCore(
-            api_base=self.api_base,
-            api_key=self.api_key,
-            model=self.model,
-            timeout=self.timeout,
+        # 该变量用于复用同一个核心实例，避免每次请求重复加载模型。
+        self._core = SpatialDemoCore(
+            detector_model=self.detector_model,
+            depth_model=self.depth_model,
+            box_thr=self.box_thr,
+            text_thr=self.text_thr,
         )
+        # 该锁用于串行化推理，减少并发推理造成的卡顿。
+        self._infer_lock = threading.Lock()
+
+    # 该函数用于获取核心执行器实例。
+    def core(self) -> SpatialDemoCore:
+        return self._core
 
     # 该函数用于根据 asset_id 解析上传图片路径。
     def resolve_image(self, payload: Dict[str, Any]) -> str:
         asset_id = str(payload.get("asset_id", "")).strip()
         if not asset_id:
-            raise ValueError("缺少 asset_id。")
+            raise ValueError("missing asset_id")
         meta = get_asset(asset_id)
         if meta is None:
-            raise ValueError(f"asset_id 不存在: {asset_id}")
+            raise ValueError(f"asset_id not found: {asset_id}")
         if str(meta.get("kind", "")) != "image":
-            raise ValueError(f"当前仅支持 image，收到: {meta.get('kind', '')}")
+            raise ValueError(f"only image is supported, got: {meta.get('kind', '')}")
         path = str(meta.get("path", "")).strip()
         if not path:
-            raise ValueError(f"asset_id 缺少路径: {asset_id}")
+            raise ValueError(f"asset path missing for: {asset_id}")
         return path
 
-    # 该函数用于执行场景理解。
-    def analyze(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+    # 该函数用于执行第一步物体检测。
+    def detect(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         image_path = self.resolve_image(payload)
-        analysis = self.core().analyze_scene(image_path=image_path)
-        return {"analysis": analysis}
+        with self._infer_lock:
+            return self.core().detect_objects(image_path=image_path)
 
-    # 该函数用于执行动作计划生成。
-    def plan(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+    # 该函数用于执行第二步深度估计。
+    def depth(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         image_path = self.resolve_image(payload)
-        task = str(payload.get("task", "")).strip()
-        if not task:
-            raise ValueError("任务不能为空。")
-        analysis = payload.get("analysis")
-        if not isinstance(analysis, dict):
-            raise ValueError("plan 需要 analysis。")
-        action_plan = self.core().generate_action_plan(image_path=image_path, task=task, context=analysis)
-        return {"action_plan": action_plan}
+        objects = payload.get("objects")
+        if not isinstance(objects, list) or not objects:
+            raise ValueError("depth requires objects list")
+        with self._infer_lock:
+            return self.core().estimate_depth(image_path=image_path, objects=objects)
+
+    # 该函数用于执行第三步 Scene Graph 构建。
+    def graph(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        objects = payload.get("objects")
+        depth_by_object = payload.get("depth_by_object")
+        image_size = payload.get("image_size")
+        if not isinstance(objects, list) or not objects:
+            raise ValueError("graph requires objects list")
+        if not isinstance(depth_by_object, dict):
+            raise ValueError("graph requires depth_by_object object")
+        if not isinstance(image_size, dict):
+            raise ValueError("graph requires image_size object")
+        scene_graph = self.core().build_scene_graph(
+            objects=objects,
+            depth_by_object=depth_by_object,
+            image_size=image_size,
+        )
+        return {"scene_graph": scene_graph}
+
+    # 该函数用于执行第五步 JSON 导出响应。
+    def export(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        scene_graph = payload.get("scene_graph")
+        if not isinstance(scene_graph, dict):
+            raise ValueError("export requires scene_graph")
+        return {"file_name": "scene_graph.json", "content": scene_graph}
 
 
 class FrontHandler(BaseHTTPRequestHandler):
     service: FrontService | None = None
 
-    # 该函数用于统一发送 JSON 响应。
+    # 该函数用于统一返回 JSON 响应。
     def send_json(self, code: int, payload: Dict[str, Any]) -> None:
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         self.send_response(code)
@@ -103,7 +131,7 @@ class FrontHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    # 该函数用于统一发送文本响应。
+    # 该函数用于统一返回文本响应。
     def send_text(self, code: int, text: str) -> None:
         body = text.encode("utf-8")
         self.send_response(code)
@@ -131,14 +159,14 @@ class FrontHandler(BaseHTTPRequestHandler):
         raw = self.rfile.read(length) if length > 0 else b"{}"
         data = json.loads(raw.decode("utf-8"))
         if not isinstance(data, dict):
-            raise ValueError("请求体必须是 JSON 对象。")
+            raise ValueError("request body must be a JSON object")
         return data
 
     # 该函数用于解析 multipart/form-data 上传文件。
-    def read_upload(self) -> tuple[str, str, bytes]:
+    def read_upload(self) -> Tuple[str, str, bytes]:
         content_type = self.headers.get("Content-Type", "")
         if "multipart/form-data" not in content_type:
-            raise ValueError("上传接口只接受 multipart/form-data。")
+            raise ValueError("upload endpoint only accepts multipart/form-data")
         form = cgi.FieldStorage(
             fp=self.rfile,
             headers=self.headers,
@@ -151,15 +179,15 @@ class FrontHandler(BaseHTTPRequestHandler):
         )
         item = form["file"] if "file" in form else None
         if item is None:
-            raise ValueError("未检测到 file 字段。")
+            raise ValueError("file field is missing")
         if isinstance(item, list):
             item = item[0]
         name = str(getattr(item, "filename", "") or "").strip()
         if not name:
-            raise ValueError("上传文件缺少文件名。")
+            raise ValueError("uploaded file name is empty")
         raw = item.file.read() if getattr(item, "file", None) else b""
         if not raw:
-            raise ValueError("上传文件为空。")
+            raise ValueError("uploaded file is empty")
         ctype = str(getattr(item, "type", "") or "")
         return name, ctype, raw
 
@@ -183,13 +211,21 @@ class FrontHandler(BaseHTTPRequestHandler):
                 meta = save_asset(filename=name, content_type=ctype, raw=raw)
                 self.send_json(200, {"ok": True, "asset": asset_public(meta)})
                 return
+
             payload = self.read_json()
-            if path == "/api/analyze":
-                self.send_json(200, {"ok": True, "result": self.service.analyze(payload)})
+            if path == "/api/detect":
+                self.send_json(200, {"ok": True, "result": self.service.detect(payload)})
                 return
-            if path == "/api/plan":
-                self.send_json(200, {"ok": True, "result": self.service.plan(payload)})
+            if path == "/api/depth":
+                self.send_json(200, {"ok": True, "result": self.service.depth(payload)})
                 return
+            if path == "/api/graph":
+                self.send_json(200, {"ok": True, "result": self.service.graph(payload)})
+                return
+            if path == "/api/export":
+                self.send_json(200, {"ok": True, "result": self.service.export(payload)})
+                return
+
             self.send_text(404, "Not Found")
         except Exception as exc:
             self.send_json(500, {"ok": False, "error": str(exc)})
