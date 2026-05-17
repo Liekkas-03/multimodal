@@ -1,0 +1,281 @@
+<!-- 该文件用于提供第一阶段最小可运行 Demo 前端。 -->
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Spatial-VLA Minimal Demo</title>
+  <style>
+    :root {
+      --bg: #f4f8fb;
+      --panel: #ffffff;
+      --line: #d7e2ee;
+      --ink: #1a2a40;
+      --sub: #617286;
+      --brand: #0b6a58;
+      --brand2: #104d86;
+      --ok: #1f7b54;
+      --bad: #a34516;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background:
+        radial-gradient(900px 300px at 0% -10%, #dff2ff 0%, transparent 70%),
+        radial-gradient(900px 300px at 100% -10%, #e8fff6 0%, transparent 70%),
+        var(--bg);
+      font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
+    }
+    .wrap { max-width: 1100px; margin: 20px auto; padding: 0 16px; }
+    .hero {
+      border-radius: 14px;
+      padding: 16px;
+      color: #fff;
+      background: linear-gradient(130deg, var(--brand), var(--brand2));
+      box-shadow: 0 10px 24px rgba(8, 47, 92, 0.2);
+    }
+    .hero h1 { margin: 0; font-size: 22px; }
+    .hero p { margin: 8px 0 0 0; font-size: 13px; opacity: 0.93; }
+    .toolbar {
+      margin-top: 12px;
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 8px;
+    }
+    .btn {
+      border: 0;
+      border-radius: 10px;
+      padding: 10px;
+      color: #fff;
+      font-weight: 600;
+      cursor: pointer;
+      background: linear-gradient(130deg, var(--brand), var(--brand2));
+    }
+    .btn.secondary { background: #6f8095; }
+    .status {
+      margin-top: 8px;
+      min-height: 18px;
+      font-size: 12px;
+      color: var(--sub);
+    }
+    .layout {
+      margin-top: 14px;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+    }
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      box-shadow: 0 8px 20px rgba(18, 33, 55, 0.06);
+      overflow: hidden;
+    }
+    .card h3 {
+      margin: 0;
+      padding: 9px 10px;
+      font-size: 13px;
+      color: #29435f;
+      background: #edf4fb;
+      border-bottom: 1px solid var(--line);
+    }
+    .body { padding: 10px; }
+    .image-box {
+      width: 100%;
+      height: 430px;
+      border: 1px dashed var(--line);
+      border-radius: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--sub);
+      background: #fbfdff;
+      overflow: hidden;
+    }
+    .image-box img {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      background: #fff;
+    }
+    textarea {
+      width: 100%;
+      min-height: 100px;
+      padding: 9px 10px;
+      border-radius: 10px;
+      border: 1px solid var(--line);
+      outline: none;
+      resize: vertical;
+      background: #fbfdff;
+      color: var(--ink);
+    }
+    pre {
+      margin: 0;
+      padding: 10px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: #f7fbff;
+      font-size: 12px;
+      line-height: 1.45;
+      white-space: pre-wrap;
+      word-break: break-word;
+      overflow: auto;
+    }
+    .stack { display: grid; gap: 10px; }
+    @media (max-width: 900px) {
+      .toolbar { grid-template-columns: 1fr 1fr; }
+      .layout { grid-template-columns: 1fr; }
+      .image-box { height: 300px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <section class="hero">
+      <h1>Spatial-VLA Minimal Demo</h1>
+      <p>Upload Image -> Analyze Scene -> Generate Plan</p>
+      <div class="toolbar">
+        <button class="btn" id="upload_btn">Upload Image</button>
+        <button class="btn" id="analyze_btn">Analyze Scene</button>
+        <button class="btn" id="plan_btn">Generate Plan</button>
+        <button class="btn secondary" id="reset_btn">Reset</button>
+      </div>
+      <input id="file_input" type="file" accept="image/*" style="display:none;" />
+      <div class="status" id="status"></div>
+    </section>
+
+    <section class="layout">
+      <article class="card">
+        <h3>Image Preview</h3>
+        <div class="body">
+          <div class="image-box" id="image_box">No image uploaded.</div>
+        </div>
+      </article>
+      <article class="card">
+        <h3>Task & Output</h3>
+        <div class="body stack">
+          <div>
+            <div style="font-size:12px;color:var(--sub);margin-bottom:5px;">Enter Task</div>
+            <textarea id="task_input" placeholder="Move the mug to the dining table.">Move the mug to the dining table.</textarea>
+          </div>
+          <div>
+            <div style="font-size:12px;color:var(--sub);margin-bottom:5px;">Scene Description</div>
+            <pre id="analysis_box">-</pre>
+          </div>
+          <div>
+            <div style="font-size:12px;color:var(--sub);margin-bottom:5px;">Action Plan</div>
+            <pre id="plan_box">-</pre>
+          </div>
+        </div>
+      </article>
+    </section>
+  </div>
+
+  <script>
+    const el = (id) => document.getElementById(id);
+    const state = {
+      assetId: "",
+      analysis: null,
+      objectUrl: ""
+    };
+
+    function setStatus(text, level = "normal") {
+      const box = el("status");
+      box.textContent = text || "";
+      if (level === "bad") box.style.color = "var(--bad)";
+      else if (level === "ok") box.style.color = "var(--ok)";
+      else box.style.color = "var(--sub)";
+    }
+
+    function showImage(file) {
+      if (state.objectUrl) URL.revokeObjectURL(state.objectUrl);
+      state.objectUrl = URL.createObjectURL(file);
+      el("image_box").innerHTML = `<img src="${state.objectUrl}" alt="scene" />`;
+    }
+
+    async function uploadImage() {
+      const file = el("file_input").files?.[0];
+      if (!file) {
+        setStatus("Please choose an image file first.", "bad");
+        return;
+      }
+      const form = new FormData();
+      form.append("file", file);
+      setStatus("Uploading image...");
+      const res = await fetch("/api/upload", { method: "POST", body: form });
+      const data = await res.json();
+      if (!data.ok) throw new Error(data.error || "upload failed");
+      state.assetId = data.asset.asset_id;
+      state.analysis = null;
+      showImage(file);
+      el("analysis_box").textContent = "-";
+      el("plan_box").textContent = "-";
+      setStatus("Image uploaded.", "ok");
+    }
+
+    async function analyzeScene() {
+      if (!state.assetId) throw new Error("Please upload image first.");
+      setStatus("Analyzing scene...");
+      const res = await fetch("/api/analyze", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ asset_id: state.assetId })
+      });
+      const data = await res.json();
+      if (!data.ok) throw new Error(data.error || "analyze failed");
+      state.analysis = data.result.analysis;
+      el("analysis_box").textContent = state.analysis.room_description || JSON.stringify(state.analysis, null, 2);
+      setStatus("Scene analyzed.", "ok");
+    }
+
+    async function generatePlan() {
+      if (!state.assetId) throw new Error("Please upload image first.");
+      if (!state.analysis) throw new Error("Please click Analyze Scene first.");
+      const task = el("task_input").value.trim();
+      if (!task) throw new Error("Task is empty.");
+      setStatus("Generating plan...");
+      const res = await fetch("/api/plan", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ asset_id: state.assetId, task, analysis: state.analysis })
+      });
+      const data = await res.json();
+      if (!data.ok) throw new Error(data.error || "plan failed");
+      const steps = data.result.action_plan?.plan_steps || [];
+      const lines = steps.map((s) => `${s.step}. ${s.description}`);
+      el("plan_box").textContent = lines.length ? lines.join("\n") : "-";
+      setStatus("Plan generated.", "ok");
+    }
+
+    function resetAll() {
+      state.assetId = "";
+      state.analysis = null;
+      if (state.objectUrl) URL.revokeObjectURL(state.objectUrl);
+      state.objectUrl = "";
+      el("image_box").textContent = "No image uploaded.";
+      el("analysis_box").textContent = "-";
+      el("plan_box").textContent = "-";
+      el("task_input").value = "Move the mug to the dining table.";
+      setStatus("Reset done.", "ok");
+    }
+
+    function withGuard(fn) {
+      return async () => {
+        try {
+          await fn();
+        } catch (err) {
+          setStatus(String(err.message || err), "bad");
+        }
+      };
+    }
+
+    el("upload_btn").addEventListener("click", () => el("file_input").click());
+    el("file_input").addEventListener("change", withGuard(uploadImage));
+    el("analyze_btn").addEventListener("click", withGuard(analyzeScene));
+    el("plan_btn").addEventListener("click", withGuard(generatePlan));
+    el("reset_btn").addEventListener("click", resetAll);
+    setStatus("Ready.");
+  </script>
+</body>
+</html>

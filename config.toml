@@ -1,0 +1,6 @@
+# 该文件用于配置第一阶段最小可运行 Demo 的模型参数。
+[vision]
+api_base = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+api_key = "sk-4127adbe4e0441ffa9fcd5fbafd41b73"
+model = "qwen-vl-plus-latest"
+timeout = 90
